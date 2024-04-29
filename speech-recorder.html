@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Generatore dataset audio</title>
+</head>
+<body>
+<script>
+	window.textSamples = [
+		{
+			lang: "it",
+			text: "La storia dell'umanità è ricca di eventi significativi e personaggi straordinari come Einstein che, con la teoria della relatività, ha rivoluzionato il nostro modo di comprendere l'universo.\nCome Einstein, ci sono molti altri pensatori e innovatori il cui contributo ha plasmato il corso della storia e ha ispirato generazioni future a esplorare le frontiere della conoscenza e della scoperta."
+		},
+		{
+			lang: "it",
+			text: "Adoro i profumi di Guerlain, Burberry e Paco Rabanne. Per caso avete uno di questi in offerta?"
+		},
+		{
+			lang: "it",
+			text: "La crema anti-età Shiseido che mi avete consigliato l'ultima volta mi ha fatto uscire uno sfogo terribile, quindi esigo un risarcimento!"
+		},
+		{
+			lang: "it",
+			text: "Posso ottenere lo sconto sui gloss di Sisley anche se non acquisto nessun rossetto MAC?"
+		},
+		{
+			lang: "en",
+			text: "Sorry, could you repeat that? I didn't catch what you said."
+		},
+	]
+</script>
+<script>
+	(() => {
+		function blobToBase64(blob) {
+		  return new Promise((resolve, _) => {
+		    const reader = new FileReader()
+		    reader.onloadend = () => resolve(reader.result)
+		    reader.readAsDataURL(blob)
+		  })
+		}
+
+		function downloadRecordedSample(sample) {
+			const a = document.createElement('a')
+	    a.href = URL.createObjectURL(new Blob([JSON.stringify(sample, undefined, 2)], {type: 'application/json'}))
+	    a.download = `${sample.id}.json`
+	    a.style.display = 'none'
+	    document.body.appendChild(a)
+
+	    a.click()
+
+	    document.body.removeChild(a)
+		}
+
+		function shuffleArray(array) {
+	    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        const temp = array[i]
+        array[i] = array[j]
+        array[j] = temp
+	    }
+		}
+
+		class AudioChunkedRecorder {
+		  voiceTrackers = new Map()
+
+		  constructor(stream, mimeType, bitsPerSecond, minDecibels = -55) {
+		    this.mimeType = mimeType
+		    this.bitsPerSecond = bitsPerSecond
+		    const audioContext = new AudioContext()
+		    const source = audioContext.createMediaStreamSource(stream)
+
+		    this.analyser = audioContext.createAnalyser()
+		    this.analyser.minDecibels = minDecibels
+		    source.connect(this.analyser)
+
+		    const destination = audioContext.createMediaStreamDestination()
+		    source.connect(destination)
+
+		    this.stream = destination.stream
+		  }
+
+		  start(seconds, onAudio) {
+		    const recordDuration = seconds * 1000
+		    const overlappingDuration = Math.floor(recordDuration * 2 / 3)
+
+		    this.intervalId = setInterval(() => { this.runRecorder(recordDuration, onAudio) }, overlappingDuration)
+		    this.runAnalyzer(recordDuration)
+		    this.runRecorder(recordDuration, onAudio)
+		  }
+
+		  stop() {
+		    clearInterval(this.intervalId)
+		    this.intervalId = undefined
+		  }
+
+		  runRecorder(milliseconds, onAudioBlob) {
+		    const chunkStartTime = Date.now()
+		    this.voiceTrackers.set(chunkStartTime, false)
+
+		    const mediaRecorder = new MediaRecorder(this.stream, {
+		      mimeType: this.mimeType,
+		      audioBitsPerSecond: this.bitsPerSecond,
+		    })
+
+		    const chunks = []
+		    mediaRecorder.ondataavailable = (event) => {
+		      chunks.push(event.data)
+		    }
+		    mediaRecorder.onstop = () => {
+		      const audioBlob = new Blob(chunks, { type: this.mimeType })
+		      const hasVoice = this.voiceTrackers.get(chunkStartTime) ?? true
+		      this.voiceTrackers.delete(chunkStartTime)
+		      onAudioBlob(audioBlob, hasVoice, this.voiceTrackers.size === 0)
+		    }
+
+		    mediaRecorder.start()
+		    setTimeout(() => { mediaRecorder.stop() }, milliseconds)
+		  }
+
+		  runAnalyzer(milliseconds) {
+		    const runAnalyzerInternal = () => {
+		      if (!this.intervalId) {
+		        return
+		      }
+
+		      const domainData = new Uint8Array(this.analyser.frequencyBinCount)
+		      const analysisTime = Date.now()
+		      this.analyser.getByteFrequencyData(domainData)
+
+		      let soundDetected = false
+		      for (let i = 0; i < this.analyser.frequencyBinCount; i++) {
+		        if (domainData[i] > 0) {
+		          soundDetected = true
+		          break
+		        }
+		      }
+
+		      if (soundDetected) {
+		        const trackersToChange = [...this.voiceTrackers.keys()].filter((key) => key <= analysisTime && analysisTime < key + milliseconds)
+		        trackersToChange.forEach((key) => this.voiceTrackers.set(key, true))
+		      }
+
+		      window.requestAnimationFrame(runAnalyzerInternal)
+		    }
+
+		    window.requestAnimationFrame(runAnalyzerInternal)
+		  }
+		}
+
+		class AudioRecorderService {
+		  activeRecorders = new Map()
+		  audioType = 'audio/webm'
+		  bitsPerSecond = 32000
+		  recordersCounter = 0
+
+		  start(seconds, onAudio) {
+		    const recorderId = ++this.recordersCounter
+
+	      navigator.mediaDevices.getUserMedia({audio: true})
+	        .then((stream) => {
+	          const recorder = new AudioChunkedRecorder(stream, this.audioType, this.bitsPerSecond)
+	          recorder.start(seconds, (blob, hasVoice, isLast) => onAudio(blob, hasVoice, isLast))
+	          this.activeRecorders.set(recorderId, recorder)
+	        })
+	        .catch((error) => {
+	        	console.error(error)
+	        })
+		    
+		    return recorderId
+		  }
+
+		  stop(id) {
+		    const recorder = this.activeRecorders.get(id)
+		    if (recorder) {
+		      recorder.stop()
+		    }
+		    this.activeRecorders.delete(id)
+		  }
+		}
+
+		const ars = new AudioRecorderService()
+		const textRecorder = (chunkSeconds) => {
+			let resolve, reject
+			const recPromise = new Promise((res, rej) => {resolve = res; rej = reject})
+			const chunks = []
+			const recId = ars.start(chunkSeconds, (blob, hasVoice, isLast) => {
+				blobToBase64(blob).then((data) => {
+					chunks.push({
+						hasVoice: hasVoice,
+						audio: data
+					})
+
+					if (isLast) {
+						resolve(chunks)
+					}
+				})
+			})
+
+			return async () => {
+				ars.stop(recId)
+				return await recPromise
+			}
+		}
+
+		document.addEventListener("DOMContentLoaded", (event) => {
+			const sessionId = Date.now().toString(36) + Math.random().toString(36).substring(2)
+			const chunkDuration = 3
+			const samplesSettings = []
+			window.textSamples.forEach((sample, index) => {
+				;['normal', 'slow', 'fast'].forEach((speed) => {
+					samplesSettings.push({
+						text: sample.text,
+						lang: sample.lang,
+						speed: speed,
+						chunkDuration: chunkDuration,
+						id: `sample_${index}_${speed}_${sample.lang}_##VOICE##_${chunkDuration}s-${sessionId}`
+					})
+				})
+			})
+			shuffleArray(samplesSettings)
+
+			const showPage = (mainElement, index, createRecordedSample) => {
+				const paginationElement = mainElement.querySelector('.pagination')
+				const prevButton = paginationElement.querySelector('button.prev')
+				const nextButton = paginationElement.querySelector('button.next')
+				prevButton.style.visibility = index === 0 ? 'hidden' : 'visible'
+				prevButton.onclick = () => showPage(mainElement, index - 1, createRecordedSample)
+				nextButton.style.visibility = index === samplesSettings.length - 1 ? 'hidden' : 'visible'
+				nextButton.onclick = () => showPage(mainElement, index + 1, createRecordedSample)
+				paginationElement.querySelector('span.progress').innerText = `${index + 1} / ${samplesSettings.length}`
+
+				const currentSample = samplesSettings[index]
+
+				const sampleElement = mainElement.querySelector('.sample')
+				sampleElement.querySelector('.hint').innerText = {
+					'normal': 'Leggi il seguente testo ad una velocità normale',
+					'slow': 'Leggi il seguente testo lentamente',
+					'fast': 'Leggi il seguente testo velocemente',
+				}[currentSample.speed]
+				sampleElement.querySelector('.text').innerHTML = currentSample.text.replace(/\n/gum, '<br>')
+
+				const toggleButton = sampleElement.querySelector('button.toggle-recording')
+				toggleButton.innerText = '▶ Start'
+				toggleButton.onclick = () => {
+					toggleButton.innerText = '◼ Stop'
+					toggleButton.classList.add('recording')
+					prevButton.disabled = true
+					nextButton.disabled = true
+
+					const stop = textRecorder(currentSample.chunkDuration)
+					toggleButton.onclick = async () => {
+						toggleButton.disabled = true
+
+						const chunks = await stop()
+						const recordedSample = createRecordedSample(currentSample, chunks)
+
+						prevButton.disabled = false
+						nextButton.disabled = false
+						toggleButton.classList.remove('recording')
+						toggleButton.innerText = '▶ Start'
+
+						downloadRecordedSample(recordedSample)
+
+						toggleButton.disabled = false
+					}
+				}
+			}
+
+			const startForm = document.getElementById('start')
+			startForm.addEventListener('submit', (event) => {
+				event.preventDefault()
+				
+				const data = new FormData(startForm)
+				const voice = data.get('voice').trim()
+				const voiceId = voice.replace(/\s+/, '').toLowerCase()
+
+				const mainElement = document.querySelector('.main')
+				showPage(mainElement, 0, (settings, chunks) => {
+					const recordedSample = structuredClone(settings)
+					recordedSample.chunks = chunks
+					recordedSample.voice = voice
+					recordedSample.id = recordedSample.id.replace('##VOICE##', voiceId)
+					return recordedSample
+				})
+				mainElement.style.display = 'block'
+				startForm.style.display = 'none'
+			})
+		})
+	})()
+</script>
+
+<style>
+	* {
+		font-family: sans-serif;
+	}
+
+	body {
+		margin: auto;
+		padding: 1em;
+    max-width: 800px;
+	}
+
+	button {
+		padding: 0.5em 1em;
+    background: white;
+    border: 1px solid black;
+    cursor: pointer;
+	}
+	button:hover {
+		background: silver;
+	}
+	button:disabled {
+    opacity: 0.2;
+    background: white;
+	}
+	input {
+		padding: 0.5em 1em;
+    border: 1px solid black;
+	}
+
+	.intro form {
+		margin: 1em 0;
+	}
+	.intro form button[type="submit"] {
+		display: block;
+	}
+
+	.main {
+		display: none;
+	}
+
+	.main .sample {
+		border: 1px solid black;
+		padding: 1em;
+    margin: 2em 0;
+	}
+
+	.main .sample .hint {
+		font-weight: bold;
+		font-style: italic;
+	}
+
+	.main .sample .text {
+		font-family: serif;
+		font-size: 1.2em;
+		line-height: 1.4;
+	}
+
+	.main .sample .toggle-recording {
+		display: block;
+		margin: 0 auto;
+    min-width: 150px;
+    background: palegreen;
+	}
+	.main .sample .toggle-recording.recording {
+		background: orangered;
+	}
+	
+	.main .pagination {
+		display: flex;
+		flex-direction: row;
+		justify-content: center;
+    align-items: center;
+		gap: 1em;
+	}
+
+	details.debug {
+		margin-top: 50px;
+	}
+</style>
+
+<h1>Strumento di generazione dataset audio</h1>
+
+<div class="intro">
+	<p>Dovrai leggere le frasi proposte, seguendo le eventuali richieste relative all'impostazione vocale. Le frasi si ripetono in ordine casuale con richieste diverse.</p>
+	<p>Sarà presente un tasto Start/Stop da cliccare per avviare e fermare la registrazione. Al termine di ciascuna registrazione verrà scaricato un file.<p>
+	<p>Alla prima registrazione dovrai concedere al browser il permesso per utilizzare il microfono.</p>
+	<form id="start">
+		<label for="voice">Inserisci il tuo nome o uno pseudonimo:</label>
+		<input type="text" required name="voice">
+		<button type="submit">Inizia</button>
+	</form>
+</div>
+
+<div class="main">
+	<div class="sample">
+		<p class="hint"></p>
+		<p class="text"></p>
+		<button class="toggle-recording"></button>
+	</div>
+	<div class="pagination">
+		<button class="prev">← Precedente</button>
+		<span class="progress"></span>
+		<button class="next">Successivo →</button>
+	</div>	
+</div>
+
+
+<script>
+	(() => {
+		document.addEventListener("DOMContentLoaded", (event) => {
+			const sectionWrapper = document.querySelector('.debug')
+			const playerElement = sectionWrapper.querySelector('.player')
+			const fileInput = sectionWrapper.querySelector('input')
+			fileInput.addEventListener('change', (event) => {
+				if (fileInput.files && fileInput.files.length > 0) {
+					const reader = new FileReader()
+					reader.onloadend = () => {
+						const data = JSON.parse(reader.result)
+
+						playerElement.innerHTML = `<div class="info"><ul><li>Lang: ${data.lang}</li><li>Voice: ${data.voice}</li><li>Speed: ${data.speed}</li><li>Text: <span>${data.text}</span></li></ul></div>`
+
+						const playButton = document.createElement('button')
+						playButton.innerText = 'Riproduci'
+						playerElement.appendChild(playButton)
+
+						const progressElement = document.createElement('span')
+						playerElement.appendChild(progressElement)
+						
+						const playChunk = (index = 0) => {
+							progressElement.innerText = `Chunk ${index+1}/${data.chunks.length} (hasVoice: ${data.chunks[index].hasVoice})`
+							const sound = new Audio(data.chunks[index].audio)
+							sound.addEventListener('ended', () => {
+								if (index + 1 < data.chunks.length) {
+									playChunk(index + 1)
+								} else {
+									progressElement.innerText = ''
+								}
+							})
+							sound.play()
+						}
+						playButton.addEventListener('click', () => {
+							playChunk()
+						})
+					}
+					reader.readAsText(fileInput.files[0])
+				} else {
+					playerElement.innerHTML = ''
+				}
+			})
+		})
+	})()
+</script>
+<details class="debug">
+	<summary>Debug</summary>
+	<p>Funzione di debug per controllare che la registrazione sia avvenuta con successo. Ricorda che la registrazione è divisa in più chunk, parzialmente sovrapposti.</p>
+	<input type="file" accept=".json" name="Carica registrazione">
+	<div class="player"></div>
+</details>
+
+</body>
+</html>
