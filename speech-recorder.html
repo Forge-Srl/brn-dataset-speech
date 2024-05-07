@@ -4,6 +4,7 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>Generatore dataset audio</title>
+	<script src="http://unpkg.com/tone"></script>
 </head>
 <body>
 <script>
@@ -31,17 +32,15 @@
 	]
 </script>
 <script>
-	(() => {
-		function blobToBase64(blob) {
-		  return new Promise((resolve, _) => {
+	function blobToBase64(blob) {
+		return new Promise((resolve, _) => {
 		    const reader = new FileReader()
 		    reader.onloadend = () => resolve(reader.result)
 		    reader.readAsDataURL(blob)
-		  })
-		}
-
-		function downloadRecordedSample(sample) {
-			const a = document.createElement('a')
+		})
+	}
+	function downloadRecordedSample(sample) {
+		const a = document.createElement('a')
 	    a.href = URL.createObjectURL(new Blob([JSON.stringify(sample, undefined, 2)], {type: 'application/json'}))
 	    a.download = `${sample.id}.json`
 	    a.style.display = 'none'
@@ -50,15 +49,16 @@
 	    a.click()
 
 	    document.body.removeChild(a)
-		}
+	}
 
+	(() => {
 		function shuffleArray(array) {
-	    for (let i = array.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1))
-        const temp = array[i]
-        array[i] = array[j]
-        array[j] = temp
-	    }
+		    for (let i = array.length - 1; i > 0; i--) {
+		        const j = Math.floor(Math.random() * (i + 1))
+		        const temp = array[i]
+		        array[i] = array[j]
+		        array[j] = temp
+		    }
 		}
 
 		class AudioChunkedRecorder {
@@ -298,25 +298,25 @@
 	body {
 		margin: auto;
 		padding: 1em;
-    max-width: 800px;
+    	max-width: 800px;
 	}
 
 	button {
 		padding: 0.5em 1em;
-    background: white;
-    border: 1px solid black;
-    cursor: pointer;
+    	background: white;
+    	border: 1px solid black;
+    	cursor: pointer;
 	}
 	button:hover {
 		background: silver;
 	}
 	button:disabled {
-    opacity: 0.2;
-    background: white;
+    	opacity: 0.2;
+    	background: white;
 	}
 	input {
 		padding: 0.5em 1em;
-    border: 1px solid black;
+    	border: 1px solid black;
 	}
 
 	.intro form {
@@ -333,7 +333,7 @@
 	.main .sample {
 		border: 1px solid black;
 		padding: 1em;
-    margin: 2em 0;
+    	margin: 2em 0;
 	}
 
 	.main .sample .hint {
@@ -350,8 +350,8 @@
 	.main .sample .toggle-recording {
 		display: block;
 		margin: 0 auto;
-    min-width: 150px;
-    background: palegreen;
+	    min-width: 150px;
+	    background: palegreen;
 	}
 	.main .sample .toggle-recording.recording {
 		background: orangered;
@@ -361,7 +361,7 @@
 		display: flex;
 		flex-direction: row;
 		justify-content: center;
-    align-items: center;
+    	align-items: center;
 		gap: 1em;
 	}
 
@@ -402,41 +402,155 @@
 		document.addEventListener("DOMContentLoaded", (event) => {
 			const sectionWrapper = document.querySelector('.debug')
 			const playerElement = sectionWrapper.querySelector('.player')
+			const initPlayer = (data) => {
+				playerElement.innerHTML = `<div class="info"><ul><li>Lang: ${data.lang}</li><li>Voice: ${data.voice}</li><li>Speed: ${data.speed}</li><li>Text: <span>${data.text}</span></li></ul></div>`
+
+				const playButton = document.createElement('button')
+				playButton.innerText = 'Riproduci'
+				playerElement.appendChild(playButton)
+
+				const progressElement = document.createElement('span')
+				playerElement.appendChild(progressElement)
+				
+				const playChunk = (index = 0) => {
+					progressElement.innerText = `Chunk ${index+1}/${data.chunks.length} (hasVoice: ${data.chunks[index].hasVoice})`
+					const sound = new Audio(data.chunks[index].audio)
+					sound.addEventListener('ended', () => {
+						if (index + 1 < data.chunks.length) {
+							playChunk(index + 1)
+						} else {
+							progressElement.innerText = ''
+						}
+					})
+					sound.play()
+				}
+				playButton.addEventListener('click', () => {
+					playChunk()
+				})
+			}
+
+			const editorElement = sectionWrapper.querySelector('.editor')
+			const initEditor = (data) => {
+				data = structuredClone(data)
+				editorElement.innerHTML = ''
+
+				const progressElement = document.createElement('span')
+				editorElement.appendChild(progressElement)
+
+				const playButton = document.createElement('button')
+				playButton.innerText = 'Genera versione con rumore'
+				editorElement.appendChild(playButton)
+
+				const addEffects = async (output, volume) => {
+					const autoFilter1 = new Tone.AutoFilter({
+					    frequency: "5n",
+					    baseFrequency: 300,
+					    octaves: 6
+					}).connect(output).start()
+
+					const autoFilter2 = new Tone.AutoFilter({
+					    frequency: "3n",
+					    baseFrequency: 500,
+					    octaves: 7
+					}).connect(autoFilter1).start()
+
+					const noise1 = new Tone.Noise({
+						volume: volume - 45,
+						type: 'pink',
+					}).start().connect(autoFilter2)
+
+					const noise2 = new Tone.Noise({
+						volume: volume - 40,
+						type: 'brown',
+					}).start().connect(output)
+
+					// Announcement bell
+					const synth = new Tone.PolySynth({
+						volume: volume - 20,
+					}).connect(output)
+					const announcementVoice = await new Promise((resolve) => {
+						const x = new Tone.Player({
+					    	url: 'https://cdn.freesound.org/previews/324/324230_8238-lq.mp3',
+					    	volume: volume - 18,
+					    	playbackRate: 1.5,
+					    	onload: () => resolve(x)
+						}).connect(output)
+					})
+					const loop = new Tone.Loop((time) => {
+						const startTime = time + Math.random()
+						synth.triggerAttack("D4", startTime)
+						synth.triggerAttack("F4", startTime + 0.4)
+						synth.triggerAttack("A4", startTime + 0.8)
+						synth.triggerAttack("E5", startTime + 1.2)
+						synth.triggerRelease(["D4", "F4", "A4", "E5"], startTime + 2)
+						announcementVoice.start(startTime + 2, 8.6, 2)
+					}, 7).start()
+
+					// Persons around
+					const crowdVoices = new Tone.Player({
+					    url: 'https://cdn.freesound.org/previews/57/57776_717853-lq.mp3',
+					    autostart: true,
+					    loop: true,
+					    volume: volume - 14,
+					}).connect(output)
+				}
+
+				const runAudio = async () => {
+					await Tone.Transport.start()
+
+					const recorder = new Tone.Recorder()
+
+					const noiseVolume = 10
+
+					const gain = new Tone.Gain(0.5).connect(recorder)
+					await addEffects(gain, noiseVolume)
+
+					for (let i = 0; i < data.chunks.length; i++) {
+						progressElement.innerText = `Chunk ${i+1}/${data.chunks.length}`
+
+						const player = await new Promise((resolve) => {
+							const x = new Tone.Player({
+					    		url: data.chunks[i].audio,
+					    		onload: () => resolve(x)
+							}).connect(gain)
+						})
+						await recorder.start()
+						player.start()
+						const blob = await new Promise((resolve) => {
+							player.onstop = async () => {
+								const blob = await recorder.stop()
+								player.dispose()
+								resolve(blob)
+							}
+						})
+						const blobData = await blobToBase64(blob)
+
+						data.chunks[i].audio = blobData
+					}
+
+					data.id = data.id.replace('-', `_noise_${20 + noiseVolume}-`)
+
+					downloadRecordedSample(data)
+				}
+
+				playButton.addEventListener('click', async () => {
+					await runAudio()
+				})
+			}
+
 			const fileInput = sectionWrapper.querySelector('input')
 			fileInput.addEventListener('change', (event) => {
 				if (fileInput.files && fileInput.files.length > 0) {
 					const reader = new FileReader()
 					reader.onloadend = () => {
 						const data = JSON.parse(reader.result)
-
-						playerElement.innerHTML = `<div class="info"><ul><li>Lang: ${data.lang}</li><li>Voice: ${data.voice}</li><li>Speed: ${data.speed}</li><li>Text: <span>${data.text}</span></li></ul></div>`
-
-						const playButton = document.createElement('button')
-						playButton.innerText = 'Riproduci'
-						playerElement.appendChild(playButton)
-
-						const progressElement = document.createElement('span')
-						playerElement.appendChild(progressElement)
-						
-						const playChunk = (index = 0) => {
-							progressElement.innerText = `Chunk ${index+1}/${data.chunks.length} (hasVoice: ${data.chunks[index].hasVoice})`
-							const sound = new Audio(data.chunks[index].audio)
-							sound.addEventListener('ended', () => {
-								if (index + 1 < data.chunks.length) {
-									playChunk(index + 1)
-								} else {
-									progressElement.innerText = ''
-								}
-							})
-							sound.play()
-						}
-						playButton.addEventListener('click', () => {
-							playChunk()
-						})
+						initPlayer(data)
+						initEditor(data)
 					}
 					reader.readAsText(fileInput.files[0])
 				} else {
 					playerElement.innerHTML = ''
+					editorElement.innerHTML = ''
 				}
 			})
 		})
@@ -447,6 +561,8 @@
 	<p>Funzione di debug per controllare che la registrazione sia avvenuta con successo. Ricorda che la registrazione è divisa in più chunk, parzialmente sovrapposti.</p>
 	<input type="file" accept=".json" name="Carica registrazione">
 	<div class="player"></div>
+
+	<div class="editor"></div>
 </details>
 
 </body>
